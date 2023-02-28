@@ -1,5 +1,5 @@
-import { Option, Action } from './types';
-import { getTranslation } from '../../../../../../utilities/getTranslation';
+import { Option, Action, OptionGroup } from './types';
+import { getTranslation } from '../../../../../utilities/getTranslation';
 
 const reduceToIDs = (options) => options.reduce((ids, option) => {
   if (option.options) {
@@ -11,72 +11,97 @@ const reduceToIDs = (options) => options.reduce((ids, option) => {
 
   return [
     ...ids,
-    option.id,
+    option.value,
   ];
 }, []);
 
-const optionsReducer = (state: Option[], action: Action): Option[] => {
+const reduceDotNotation = (doc: any, key: string) => {
+  const nestedKeys = key.split('.');
+  let value = doc;
+  
+  nestedKeys.forEach((nestedKey) => {
+    value = value[nestedKey] || '';
+  });
+
+  return value;
+}; 
+
+const sortOptions = (options: Option[]): Option[] => options.sort((a: Option, b: Option) => {
+  if (typeof a?.label?.localeCompare === 'function' && typeof b?.label?.localeCompare === 'function') {
+    return a.label.localeCompare(b.label);
+  }
+
+  return 0;
+});
+
+const optionsReducer = (state: OptionGroup[], action: Action): OptionGroup[] => {
   switch (action.type) {
     case 'CLEAR': {
-      return action.required ? [] : [{ value: 'null', label: action.i18n.t('general:none') }];
+      return [];
+    }
+
+    case 'UPDATE': {
+      const { collection, doc, i18n } = action;
+      const relation = collection.slug;
+      const newOptions = [...state];
+      const labelKey = collection.admin.useAsTitle || 'id';
+      const foundOptionGroup = newOptions.find((optionGroup) => optionGroup.label === collection.labels.plural);
+      const foundOption = foundOptionGroup?.options?.find((option) => option.value === doc.id);
+
+      if (foundOption) {
+        foundOption.label = reduceDotNotation(doc, labelKey) || `${i18n.t('general:untitled')} - ID: ${doc.id}`;
+        foundOption.relationTo = relation;
+      }
+
+      return newOptions;
     }
 
     case 'ADD': {
-      const { hasMultipleRelations, collection, relation, data, i18n } = action;
-
+      const { collection, docs, sort, ids = [], i18n } = action;
+      const relation = collection.slug;
       const labelKey = collection.admin.useAsTitle || 'id';
-
       const loadedIDs = reduceToIDs(state);
-
-      if (!hasMultipleRelations) {
-        return [
-          ...state,
-          ...data.docs.reduce((docs, doc) => {
-            if (loadedIDs.indexOf(doc.id) === -1) {
-              loadedIDs.push(doc.id);
-              return [
-                ...docs,
-                {
-                  label: doc[labelKey],
-                  value: doc.id,
-                },
-              ];
-            }
-            return docs;
-          }, []),
-        ];
-      }
-
       const newOptions = [...state];
-      const optionsToAddTo = newOptions.find((optionGroup) => optionGroup.label === getTranslation(collection.labels.plural, i18n));
+      const optionsToAddTo = newOptions.find((optionGroup) => optionGroup.label === collection.labels.plural);
 
-      const newSubOptions = data.docs.reduce((docs, doc) => {
+      const newSubOptions = docs.reduce((docSubOptions, doc) => {
         if (loadedIDs.indexOf(doc.id) === -1) {
           loadedIDs.push(doc.id);
 
           return [
-            ...docs,
+            ...docSubOptions,
             {
-              label: doc[labelKey],
+              label: reduceDotNotation(doc, labelKey) || `${i18n.t('general:untitled')} - ID: ${doc.id}`,
               relationTo: relation,
               value: doc.id,
             },
           ];
         }
 
-        return docs;
+        return docSubOptions;
       }, []);
 
+      ids.forEach((id) => {
+        if (!loadedIDs.includes(id)) {
+          newSubOptions.push({
+            relationTo: relation,
+            label: labelKey === 'id' ? id : `${i18n.t('general:untitled')} - ID: ${id}`,
+            value: id,
+          });
+        }
+      });
+
       if (optionsToAddTo) {
-        optionsToAddTo.options = [
+        const subOptions = [
           ...optionsToAddTo.options,
           ...newSubOptions,
         ];
+
+        optionsToAddTo.options = sort ? sortOptions(subOptions) : subOptions;
       } else {
         newOptions.push({
           label: getTranslation(collection.labels.plural, i18n),
-          options: newSubOptions,
-          value: undefined,
+          options: sort ? sortOptions(newSubOptions) : newSubOptions,
         });
       }
 
